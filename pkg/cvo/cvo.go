@@ -47,6 +47,9 @@ import (
 	preconditioncv "github.com/openshift/cluster-version-operator/pkg/payload/precondition/clusterversion"
 	"github.com/openshift/cluster-version-operator/pkg/verify"
 	"github.com/openshift/cluster-version-operator/pkg/verify/verifyconfigmap"
+	"github.com/openshift/library-go/pkg/operator/events"
+
+	"github.com/openshift/library-go/pkg/controller/factory"
 )
 
 const (
@@ -141,6 +144,8 @@ type Operator struct {
 	// the cluster as a config map
 	signatureStore *verify.StorePersister
 
+	conditionObserver factory.Controller
+
 	configSync ConfigSyncWorker
 	// statusInterval is how often the configSync worker is allowed to retrigger
 	// the main sync status loop.
@@ -213,6 +218,11 @@ func New(
 
 	// make sure this is initialized after all the listers are initialized
 	optr.upgradeableChecks = optr.defaultUpgradeableChecks()
+
+	optr.conditionObserver = newClusterOperatorConditionObserver(coInformer, events.NewRecorder(kubeClient.CoreV1().Events(namespace), "ClusterVersionOperator", &corev1.ObjectReference{
+		Kind: "Namespace",
+		Name: namespace,
+	}))
 
 	if enableMetrics {
 		if err := optr.registerMetrics(coInformer.Informer()); err != nil {
@@ -336,6 +346,9 @@ func (optr *Operator) Run(ctx context.Context, workers int) {
 		klog.Info("Caches never synchronized")
 		return
 	}
+
+	// run condition observer
+	go optr.conditionObserver.Run(ctx, 1)
 
 	// trigger the first cluster version reconcile always
 	optr.queue.Add(optr.queueKey())
